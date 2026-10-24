@@ -1,0 +1,6 @@
+{
+  "name": "JTec AutoPublisher",
+  "description": "Fast mobile-first video management shell with secure authentication and private cloud storage.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
