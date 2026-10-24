@@ -6,7 +6,24 @@ Only whitelisted operations are applied. Unknown keys are ignored.
 """
 import json, os, subprocess, sys, textwrap
 
-FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+FALLBACK_FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+FONT_CHOICES = ["Montserrat:semibold", "Roboto:medium", "Open Sans:semibold"]
+
+
+def pick_font():
+    """Use the first clean sans font that is really installed, else DejaVu Bold."""
+    for pattern in FONT_CHOICES:
+        want = pattern.split(":")[0].lower()
+        try:
+            out = subprocess.check_output(["fc-match", "-f", "%{family}|%{file}", pattern], text=True)
+            fam, path = out.split("|", 1)
+            if want in fam.lower() and os.path.exists(path):
+                return path
+        except Exception:
+            pass
+    return FALLBACK_FONT
+
+
 LOOKS = {
     "cinematic": "eq=contrast=1.12:saturation=1.12:gamma=0.97,colorbalance=rs=-0.04:bs=0.06:rh=0.05:bh=-0.04,vignette=PI/5",
     "warm": "colorbalance=rs=0.08:gs=0.02:bs=-0.08:rh=0.05:bh=-0.05,eq=saturation=1.08",
@@ -16,7 +33,6 @@ LOOKS = {
 }
 SIZES = {"small": 26, "medium": 18, "large": 12}   # fontsize = min(width, height) / value
 COLORS = {"white": "white", "yellow": "yellow", "black": "black"}
-POS = {"bottom": "h-text_h-h/10", "center": "(h-text_h)/2", "top": "h/12"}
 
 
 def clamp(v, lo, hi, default):
@@ -85,24 +101,41 @@ def main():
     if look in LOOKS:
         vf.append(LOOKS[look])
 
-    # --- text ---
+    # --- text (each line is centered on its own; works on every FFmpeg version) ---
     text = plan.get("text") or {}
     content = str(text.get("content", "")).strip()[:200]
     if content:
+        font = pick_font()
         size = SIZES.get(text.get("size", "medium"), 18)
         fs = max(int(min(w, h) / size), 12)
-        per_line = max(int(0.88 * w / (0.62 * fs)), 8)
-        wrapped = "\n".join(textwrap.wrap(content, width=per_line)) or content
-        with open("caption.txt", "w", encoding="utf-8") as f:
-            f.write(wrapped)
+        per_line = max(int(0.86 * w / (0.58 * fs)), 8)
+        lines = textwrap.wrap(content, width=per_line) or [content]
+        lh = int(fs * 1.3)
+        n = len(lines)
         color = COLORS.get(text.get("color", "white"), "white")
-        pos = POS.get(text.get("position", "bottom"), POS["bottom"])
+        pos = text.get("position", "bottom")
+        style = text.get("style", "clean")
         fi = clamp(text.get("fade_in", 0.5), 0, 3, 0.5)
         alpha = f":alpha='min(t/{fi},1)'" if fi > 0 else ""
-        vf.append(
-            f"drawtext=fontfile={FONT}:textfile=caption.txt:expansion=none:"
-            f"fontcolor={color}:fontsize={fs}:line_spacing=8:box=1:boxcolor=black@0.5:boxborderw=16:"
-            f"x=(w-text_w)/2:y={pos}{alpha}")
+        if style == "box":
+            deco = f"box=1:boxcolor=black@0.5:boxborderw={max(fs // 3, 8)}"
+        elif style == "outline":
+            deco = f"borderw={max(fs // 14, 2)}:bordercolor=black@0.9"
+        else:  # clean: soft shadow, no box (TikTok / CapCut look)
+            deco = f"borderw={max(fs // 30, 1)}:bordercolor=black@0.35:shadowcolor=black@0.55:shadowx={max(fs // 24, 1)}:shadowy={max(fs // 24, 1)}"
+        for i, line in enumerate(lines):
+            fname = f"caption_{i}.txt"
+            with open(fname, "w", encoding="utf-8") as f:
+                f.write(line)
+            if pos == "top":
+                y = f"h/12+{i * lh}"
+            elif pos == "center":
+                y = f"(h-{n * lh})/2+{i * lh}"
+            else:
+                y = f"h-h/9-{(n - i) * lh}"
+            vf.append(
+                f"drawtext=fontfile={font}:textfile={fname}:expansion=none:"
+                f"fontcolor={color}:fontsize={fs}:{deco}:x=(w-text_w)/2:y={y}{alpha}")
 
     # --- fades (last, so they cover everything) ---
     fin = clamp(plan.get("fade_in", 0), 0, 3, 0)
