@@ -4,12 +4,13 @@ import { getSupabaseAdminClient, getSupabaseClient, getSupabaseConfigStatus } fr
 import {
   getGitHubConfigStatus,
   getLatestWorkflowRun,
-  triggerCaptionWorkflow,
+  triggerRenderWorkflow,
 } from '../integrations/github.js';
+import { validateAndSanitizePlan, RenderPlan } from '../../shared/plan.js';
 
 const router = Router();
 
-// 1. Trigger Render with Caption
+// 1. Trigger Render with Plan or Caption
 router.post('/caption', requireAuth, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   // Check GitHub configuration
   const githubStatus = getGitHubConfigStatus();
@@ -31,22 +32,35 @@ router.post('/caption', requireAuth, async (req: AuthenticatedRequest, res: Resp
     return;
   }
 
-  const { videoId, caption } = req.body;
-
-  // Validate caption
-  if (!caption || typeof caption !== 'string' || !caption.trim()) {
-    res.status(400).json({ error: 'Caption is required.' });
-    return;
-  }
-
-  const trimmedCaption = caption.trim();
-  if (trimmedCaption.length > 200) {
-    res.status(400).json({ error: 'Caption must be 200 characters or less.' });
-    return;
-  }
+  const { videoId, plan, caption } = req.body;
 
   if (!videoId || typeof videoId !== 'string') {
     res.status(400).json({ error: 'videoId is required.' });
+    return;
+  }
+
+  let validatedPlan: RenderPlan | null = null;
+  let trimmedCaption: string | null = null;
+
+  if (plan !== undefined) {
+    try {
+      validatedPlan = validateAndSanitizePlan(plan);
+    } catch (err: any) {
+      res.status(400).json({ error: `Invalid render plan: ${err.message}` });
+      return;
+    }
+  } else if (caption !== undefined) {
+    if (typeof caption !== 'string' || !caption.trim()) {
+      res.status(400).json({ error: 'Caption is required when no plan is provided.' });
+      return;
+    }
+    trimmedCaption = caption.trim();
+    if (trimmedCaption.length > 200) {
+      res.status(400).json({ error: 'Caption must be 200 characters or less.' });
+      return;
+    }
+  } else {
+    res.status(400).json({ error: 'Either plan or caption is required.' });
     return;
   }
 
@@ -76,8 +90,12 @@ router.post('/caption', requireAuth, async (req: AuthenticatedRequest, res: Resp
       return;
     }
 
-    // Call GitHub Actions workflow
-    await triggerCaptionWorkflow(video.storage_path, trimmedCaption);
+    // Call GitHub Actions workflow with storage_path and plan (or caption fallback)
+    if (validatedPlan) {
+      await triggerRenderWorkflow(video.storage_path, { plan: validatedPlan });
+    } else {
+      await triggerRenderWorkflow(video.storage_path, { caption: trimmedCaption! });
+    }
 
     res.json({
       success: true,

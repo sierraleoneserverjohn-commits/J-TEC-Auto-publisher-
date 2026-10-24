@@ -1,4 +1,5 @@
 import { ConfigStatus, RenderStatusResponse, UserProfile, VideoItem } from '../types';
+import { RenderPlan } from '../../shared/plan';
 
 const TOKEN_KEY = 'jtec_auth_token';
 
@@ -195,7 +196,20 @@ export const api = {
     }
   },
 
-  // 4. Render with Caption
+  // 4. Render with Plan or Caption
+  async renderPlan(videoId: string, plan: RenderPlan): Promise<{ success: boolean; message: string }> {
+    const res = await fetch('/api/render/caption', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ videoId, plan }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to start render workflow');
+    }
+    return data;
+  },
+
   async renderWithCaption(videoId: string, caption: string): Promise<{ success: boolean; message: string }> {
     const res = await fetch('/api/render/caption', {
       method: 'POST',

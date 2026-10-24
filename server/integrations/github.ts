@@ -73,7 +73,10 @@ export async function getLatestWorkflowRun(): Promise<WorkflowRunStatus | null> 
   };
 }
 
-export async function triggerCaptionWorkflow(storagePath: string, caption: string): Promise<void> {
+export async function triggerRenderWorkflow(
+  storagePath: string,
+  options: { plan?: any; caption?: string }
+): Promise<void> {
   const config = getGitHubConfig();
   if (!config) {
     throw new Error('GitHub rendering is not configured. GITHUB_TOKEN, GITHUB_REPO, and GITHUB_REF are required.');
@@ -92,7 +95,18 @@ export async function triggerCaptionWorkflow(storagePath: string, caption: strin
     throw new Error(`A render workflow is already ${latestRun.status.replace('_', ' ')}. Please wait for it to complete.`);
   }
 
-  // 2. Dispatch workflow run
+  // 2. Build inputs: plan if provided, caption if only caption provided
+  const inputs: Record<string, string> = {
+    storage_path: storagePath,
+  };
+
+  if (options.plan) {
+    inputs.plan = typeof options.plan === 'string' ? options.plan : JSON.stringify(options.plan);
+  } else if (options.caption) {
+    inputs.caption = options.caption;
+  }
+
+  // 3. Dispatch workflow run
   const dispatchUrl = `https://api.github.com/repos/${config.repo}/actions/workflows/ffmpeg-caption.yml/dispatches`;
 
   const response = await fetch(dispatchUrl, {
@@ -106,10 +120,7 @@ export async function triggerCaptionWorkflow(storagePath: string, caption: strin
     },
     body: JSON.stringify({
       ref: config.ref,
-      inputs: {
-        storage_path: storagePath,
-        caption: caption,
-      },
+      inputs,
     }),
   });
 
@@ -119,3 +130,9 @@ export async function triggerCaptionWorkflow(storagePath: string, caption: strin
     throw new Error(`GitHub rejected workflow dispatch (${response.status}): ${message}`);
   }
 }
+
+// Backwards-compatible alias for caption-only dispatch
+export async function triggerCaptionWorkflow(storagePath: string, caption: string): Promise<void> {
+  return triggerRenderWorkflow(storagePath, { caption });
+}
+
