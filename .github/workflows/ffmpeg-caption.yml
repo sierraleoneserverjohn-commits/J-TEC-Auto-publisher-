@@ -1,0 +1,78 @@
+name: FFmpeg Caption Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      storage_path:
+        description: "Storage path of the video (example: owner/1234-abcd.mp4)"
+        required: true
+      caption:
+        description: "Caption text to burn in at the bottom"
+        required: true
+        default: "Hello from JTec AutoPublisher"
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      STORAGE_PATH: ${{ inputs.storage_path }}
+      CAPTION: ${{ inputs.caption }}
+    steps:
+      - name: Install FFmpeg and font
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
+
+      - name: Download original video
+        run: |
+          set -euo pipefail
+          RESP=$(curl -sS -X POST "$SUPABASE_URL/storage/v1/object/sign/videos/$STORAGE_PATH" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"expiresIn":600}')
+          SIGNED=$(echo "$RESP" | jq -r '.signedURL // empty')
+          if [ -z "$SIGNED" ]; then echo "Could not sign URL. Check the storage path."; exit 1; fi
+          URL="$SUPABASE_URL/storage/v1$SIGNED"
+          echo "::add-mask::$URL"
+          curl -sS -f -o input.mp4 "$URL"
+          ls -l input.mp4
+
+      - name: Show source video info
+        run: |
+          ffprobe -v error -select_streams v:0 \
+            -show_entries stream=width,height,r_frame_rate,codec_name,bit_rate \
+            -show_entries format=duration -of default=nw=1 input.mp4
+
+      - name: Burn in caption (no resize, high quality)
+        run: |
+          set -euo pipefail
+          printf '%s' "$CAPTION" > caption.txt
+          ffmpeg -loglevel error -y -i input.mp4 \
+            -vf "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:textfile=caption.txt:expansion=none:fontcolor=white:fontsize=h/24:box=1:boxcolor=black@0.5:boxborderw=16:x=(w-text_w)/2:y=h-text_h-h/10" \
+            -c:v libx264 -crf 18 -preset medium -pix_fmt yuv420p \
+            -c:a copy -movflags +faststart output.mp4
+          ls -l output.mp4
+
+      - name: Upload result and add it to the library
+        run: |
+          set -euo pipefail
+          OUT_PATH="owner/rendered-${GITHUB_RUN_ID}.mp4"
+          curl -sS -f -X POST "$SUPABASE_URL/storage/v1/object/videos/$OUT_PATH" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Content-Type: video/mp4" \
+            --data-binary @output.mp4 > /dev/null
+          SIZE=$(stat -c %s output.mp4)
+          BODY=$(jq -n --arg p "$OUT_PATH" --arg n "Captioned $GITHUB_RUN_ID" --argjson s "$SIZE" \
+            '{user_id:"owner", name:$n, storage_path:$p, size_bytes:$s, status:"ready"}')
+          curl -sS -f -X POST "$SUPABASE_URL/rest/v1/videos" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            -d "$BODY"
+          echo "Done. Check your Library."
