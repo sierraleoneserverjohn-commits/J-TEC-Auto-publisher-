@@ -26,3 +26,10 @@ export interface ConfigStatus {
   missingKeys: string[];
   authRequired?: boolean;
 }
+
+export interface RenderStatusResponse {
+  status: 'queued' | 'in_progress' | 'completed' | string | null;
+  conclusion: 'success' | 'failure' | 'cancelled' | 'timed_out' | string | null;
+  html_url: string | null;
+  created_at: string | null;
+}

@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import statusRouter from './server/routes/status.js';
 import authRouter from './server/routes/auth.js';
 import videosRouter from './server/routes/videos.js';
+import renderRouter from './server/routes/render.js';
 
 dotenv.config();
 
@@ -21,6 +22,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/api/status', statusRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/videos', videosRouter);
+app.use('/api/render', renderRouter);
 
 // Global API error handler
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

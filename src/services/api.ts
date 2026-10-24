@@ -1,4 +1,4 @@
-import { ConfigStatus, UserProfile, VideoItem } from '../types';
+import { ConfigStatus, RenderStatusResponse, UserProfile, VideoItem } from '../types';
 
 const TOKEN_KEY = 'jtec_auth_token';
 
@@ -193,5 +193,30 @@ export const api = {
     if (!res.ok) {
       throw new Error(data.error || 'Failed to delete video');
     }
+  },
+
+  // 4. Render with Caption
+  async renderWithCaption(videoId: string, caption: string): Promise<{ success: boolean; message: string }> {
+    const res = await fetch('/api/render/caption', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ videoId, caption }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to start render workflow');
+    }
+    return data;
+  },
+
+  async getRenderStatus(): Promise<RenderStatusResponse> {
+    const res = await fetch('/api/render/status', {
+      headers: getAuthHeaders(),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to fetch render status');
+    }
+    return data;
   },
 };

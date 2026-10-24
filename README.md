@@ -1,6 +1,6 @@
 # JTec AutoPublisher (Stage 1 — App Shell)
 
-**JTec AutoPublisher** is a mobile-first web application designed for Android viewports. It provides an ultra-fast, lightweight shell for video content creators, featuring direct access, private cloud storage with short-lived signed streaming URLs, and complete video library management.
+**JTec AutoPublisher** is a mobile-first web application designed for Android viewports. It provides an ultra-fast, lightweight shell for video content creators, featuring direct access, private cloud storage with short-lived signed streaming URLs, video library management, and cloud rendering with captions via GitHub Actions.
 
 ---
 
@@ -17,6 +17,7 @@
 3. **Video Library Page**:
    - Lists all your stored videos with thumbnail previews, custom name, formatted upload date, file size (in MB), and status.
    - **Preview (Play)**: In-app HTML5 video playback via secure, short-lived signed URLs.
+   - **Edit (Render with caption)**: Opens a dedicated panel with an overlay caption text box (max 200 characters), note on re-encoding, and a **Render** button. Displays **real** execution status polled every 5 seconds from GitHub Actions (`queued`, `in progress`, `completed (success)` or `completed (failed)`). Once complete, provides a **Refresh library** button.
    - **Rename**: Quick video title updating.
    - **Download**: Direct file download using short-lived signed URLs with download content-disposition headers.
    - **Delete**: Permanently removes the video from both the Postgres database and private Supabase storage.
@@ -24,9 +25,8 @@
    - View storage and Supabase backend status.
    - Empty **Preferences** section placeholder (ready for future stages).
 5. **Real State & Security**:
-   - If Supabase is not configured yet, the app opens normally and displays a dismissible warning banner at the top with a **Check connection** button.
-   - Upload and Library screens display clear, friendly messages with retry buttons when disconnected.
-   - Zero hardcoded credentials; all keys reside in server-side secrets.
+   - If Supabase or GitHub is not configured, displays exact error messages and Retry buttons instead of crashing or showing fake data.
+   - Zero hardcoded credentials; all keys reside in server-side secrets (never sent to client or logged).
    - Videos are kept in **private** cloud storage accessible only via short-lived signed URLs.
 
 ---
@@ -41,6 +41,9 @@ Configure these variables in **Settings > Secrets** (or in a `.env` file for loc
 | `SUPABASE_URL` | *Required* | Your Supabase project URL (e.g., `https://xyzproject.supabase.co`) |
 | `SUPABASE_ANON_KEY` | *Required* | Your Supabase project public anon key |
 | `SUPABASE_SERVICE_ROLE_KEY` | *Required* | Your Supabase service role secret key (used server-side for signed URLs and private storage) |
+| `GITHUB_TOKEN` | *Required for rendering* | Personal Access Token (classic or fine-grained) with `actions:write` or `repo` scope to trigger workflow dispatches |
+| `GITHUB_REPO` | *Required for rendering* | The GitHub repository in `owner/repo-name` format hosting `ffmpeg-caption.yml` |
+| `GITHUB_REF` | *Required for rendering* | The git branch or ref (e.g., `main`) for the workflow dispatch |
 | `PORT` | `3000` | Optional server port |
 
 ---

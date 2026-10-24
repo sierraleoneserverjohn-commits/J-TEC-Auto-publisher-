@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { Play, Download, Edit2, Trash2, Film, RefreshCw, AlertCircle, Plus, Check, X } from 'lucide-react';
+import { Play, Download, Edit2, Trash2, Film, RefreshCw, AlertCircle, Plus, Check, X, Clapperboard } from 'lucide-react';
 import { VideoItem } from '../types';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { RenderCaptionModal } from '../components/RenderCaptionModal';
 
 interface LibraryPageProps {
   onSelectVideoForPreview: (video: VideoItem) => void;
@@ -27,6 +28,9 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({ onSelectVideoForPrevie
 
   // Download state
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
+
+  // Edit / Render with Caption modal state
+  const [editingVideoForRender, setEditingVideoForRender] = useState<VideoItem | null>(null);
 
   const { configStatus, checkStatus } = useAuth();
 
@@ -243,13 +247,24 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({ onSelectVideoForPrevie
 
               {/* Actions Toolbar */}
               <div className="flex items-center justify-between pt-2 border-t border-slate-800/80">
-                <button
-                  onClick={() => onSelectVideoForPreview(video)}
-                  className="min-h-[44px] flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-blue-400 hover:bg-blue-500/10 transition-colors"
-                >
-                  <Play className="w-3.5 h-3.5 fill-blue-400" />
-                  <span>Preview</span>
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => onSelectVideoForPreview(video)}
+                    className="min-h-[44px] flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-blue-400 hover:bg-blue-500/10 transition-colors"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-blue-400" />
+                    <span>Preview</span>
+                  </button>
+
+                  <button
+                    onClick={() => setEditingVideoForRender(video)}
+                    className="min-h-[44px] flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-purple-400 hover:bg-purple-500/10 transition-colors"
+                    aria-label={`Edit ${video.name}`}
+                  >
+                    <Clapperboard className="w-3.5 h-3.5" />
+                    <span>Edit</span>
+                  </button>
+                </div>
 
                 <div className="flex items-center gap-1">
                   <button
@@ -368,6 +383,15 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({ onSelectVideoForPrevie
             </div>
           </div>
         </div>
+      )}
+
+      {/* Render with Caption Modal */}
+      {editingVideoForRender && (
+        <RenderCaptionModal
+          video={editingVideoForRender}
+          onClose={() => setEditingVideoForRender(null)}
+          onRefreshLibrary={fetchVideos}
+        />
       )}
     </div>
   );
