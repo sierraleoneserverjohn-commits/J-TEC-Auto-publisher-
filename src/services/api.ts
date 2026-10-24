@@ -75,14 +75,8 @@ export const api = {
   },
 
   async getMe(): Promise<UserProfile> {
-    const token = getStoredToken();
-    if (!token) {
-      throw new Error('No authentication token available');
-    }
     const res = await fetch('/api/auth/me', {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
+      headers: getAuthHeaders(),
     });
     const data = await res.json();
     if (!res.ok) {
@@ -92,15 +86,12 @@ export const api = {
   },
 
   async logout(): Promise<void> {
-    const token = getStoredToken();
-    if (token) {
-      try {
-        await fetch('/api/auth/logout', {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}` },
-        });
-      } catch {}
-    }
+    try {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+      });
+    } catch {}
     setStoredToken(null);
   },
 
@@ -124,9 +115,6 @@ export const api = {
   ): Promise<VideoItem> {
     return new Promise((resolve, reject) => {
       const token = getStoredToken();
-      if (!token) {
-        return reject(new Error('Authentication required to upload videos.'));
-      }
 
       const formData = new FormData();
       formData.append('video', file);
@@ -136,7 +124,9 @@ export const api = {
 
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/api/videos/upload');
-      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      if (token) {
+        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      }
 
       xhr.upload.addEventListener('progress', (e) => {
         if (e.lengthComputable) {
