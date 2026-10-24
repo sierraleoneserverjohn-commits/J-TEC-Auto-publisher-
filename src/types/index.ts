@@ -24,4 +24,5 @@ export interface AuthSession {
 export interface ConfigStatus {
   configured: boolean;
   missingKeys: string[];
+  authRequired?: boolean;
 }

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Play, Download, Edit2, Trash2, Film, RefreshCw, AlertCircle, Plus, Check, X } from 'lucide-react';
 import { VideoItem } from '../types';
 import { api } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 
 interface LibraryPageProps {
   onSelectVideoForPreview: (video: VideoItem) => void;
@@ -27,10 +28,18 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({ onSelectVideoForPrevie
   // Download state
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
+  const { configStatus, checkStatus } = useAuth();
+
   const fetchVideos = async () => {
     setLoading(true);
     setError(null);
     try {
+      const status = await checkStatus();
+      if (!status.configured) {
+        setError('Supabase is not connected. Video library is currently unavailable.');
+        setLoading(false);
+        return;
+      }
       const data = await api.getVideos();
       setVideos(data);
     } catch (err: any) {

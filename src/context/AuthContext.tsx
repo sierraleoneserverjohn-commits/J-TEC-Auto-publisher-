@@ -6,6 +6,7 @@ interface AuthContextType {
   user: UserProfile | null;
   loading: boolean;
   configStatus: ConfigStatus | null;
+  authRequired: boolean;
   checkStatus: () => Promise<ConfigStatus>;
   login: (email: string, pass: string) => Promise<void>;
   signup: (email: string, pass: string) => Promise<string | undefined>;
@@ -28,6 +29,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const fallbackStatus: ConfigStatus = {
         configured: false,
         missingKeys: ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY'],
+        authRequired: false,
       };
       setConfigStatus(fallbackStatus);
       return fallbackStatus;
@@ -41,7 +43,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoading(true);
       const status = await checkStatus();
 
-      if (status.configured) {
+      // Only attempt user profile loading if Supabase is configured and auth is required
+      if (status.configured && status.authRequired) {
         const token = getStoredToken();
         if (token) {
           try {
@@ -81,12 +84,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
   };
 
+  const authRequired = Boolean(configStatus?.authRequired);
+
   return (
     <AuthContext.Provider
       value={{
         user,
         loading,
         configStatus,
+        authRequired,
         checkStatus,
         login,
         signup,

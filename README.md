@@ -1,12 +1,15 @@
 # JTec AutoPublisher (Stage 1 — App Shell)
 
-**JTec AutoPublisher** is a mobile-first web application designed for Android viewports. It provides an ultra-fast, lightweight shell for video content creators, featuring user authentication, private cloud storage with short-lived signed streaming URLs, and complete video library management.
+**JTec AutoPublisher** is a mobile-first web application designed for Android viewports. It provides an ultra-fast, lightweight shell for video content creators, featuring direct access, private cloud storage with short-lived signed streaming URLs, and complete video library management.
 
 ---
 
 ## What the App Does (Stage 1 Scope)
 
-1. **Email & Password Authentication**: Full sign-up, sign-in, and sign-out flows powered by Supabase Auth with secure session tokens.
+1. **Direct Access with Optional Authentication**:
+   - By default, the app opens directly with **no login required** (`AUTH_REQUIRED=false`).
+   - Uses a single fixed owner ID (`owner`) for all videos.
+   - When `AUTH_REQUIRED=true` is enabled, email/password login is required with per-user video isolation.
 2. **Video Uploading with Real Progress**:
    - Accepts only `.mp4`, `.mov`, and `.webm` files (rejects any other file type).
    - Enforces a 200 MB maximum size limit with client-side and server-side checks.
@@ -18,14 +21,13 @@
    - **Download**: Direct file download using short-lived signed URLs with download content-disposition headers.
    - **Delete**: Permanently removes the video from both the Postgres database and private Supabase storage.
 4. **Settings Page**:
-   - View account details and active connection state.
+   - View storage and Supabase backend status.
    - Empty **Preferences** section placeholder (ready for future stages).
-   - Log out action.
 5. **Real State & Security**:
-   - Shows a clear **"Supabase Not Connected"** screen if required secrets are not present.
-   - Zero hardcoded credentials; all secrets live on the server.
-   - Private Supabase storage bucket with short-lived signed URLs.
-   - Row-Level Security (RLS) ensuring each user can only ever access their own videos.
+   - If Supabase is not configured yet, the app opens normally and displays a dismissible warning banner at the top with a **Check connection** button.
+   - Upload and Library screens display clear, friendly messages with retry buttons when disconnected.
+   - Zero hardcoded credentials; all keys reside in server-side secrets.
+   - Videos are kept in **private** cloud storage accessible only via short-lived signed URLs.
 
 ---
 
@@ -33,18 +35,21 @@
 
 Configure these variables in **Settings > Secrets** (or in a `.env` file for local development):
 
-| Variable | Description |
-| :--- | :--- |
-| `SUPABASE_URL` | Your Supabase project URL (e.g., `https://xyzproject.supabase.co`) |
-| `SUPABASE_ANON_KEY` | Your Supabase project public anon key |
-| `SUPABASE_SERVICE_ROLE_KEY` | Your Supabase service role secret key (used server-side for signed URLs and private storage) |
-| `PORT` | Optional server port (defaults to `3000`) |
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `AUTH_REQUIRED` | `"false"` | When `"false"`, bypasses login and uses single-owner mode. Set to `"true"` to require email/password login. |
+| `SUPABASE_URL` | *Required* | Your Supabase project URL (e.g., `https://xyzproject.supabase.co`) |
+| `SUPABASE_ANON_KEY` | *Required* | Your Supabase project public anon key |
+| `SUPABASE_SERVICE_ROLE_KEY` | *Required* | Your Supabase service role secret key (used server-side for signed URLs and private storage) |
+| `PORT` | `3000` | Optional server port |
 
 ---
 
 ## Supabase Setup SQL
 
-Copy and paste the SQL script below into the **SQL Editor** in your [Supabase Dashboard](https://supabase.com/dashboard) and run it:
+Copy and paste the SQL script below into the **SQL Editor** in your [Supabase Dashboard](https://supabase.com/dashboard) and run it.
+
+> Note: `user_id` is defined as a plain `TEXT` column without a foreign key constraint to `auth.users`, ensuring the single-owner mode (`user_id = 'owner'`) functions properly without login.
 
 ```sql
 -- ========================================================
@@ -52,7 +57,7 @@ Copy and paste the SQL script below into the **SQL Editor** in your [Supabase Da
 -- ========================================================
 CREATE TABLE IF NOT EXISTS public.videos (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL, -- Plain text column supporting both single-owner mode ('owner') and auth user IDs
     name TEXT NOT NULL,
     storage_path TEXT NOT NULL,
     size_bytes BIGINT NOT NULL,
@@ -60,46 +65,12 @@ CREATE TABLE IF NOT EXISTS public.videos (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Index for fast user queries
+-- Index for fast queries
 CREATE INDEX IF NOT EXISTS idx_videos_user_id ON public.videos(user_id);
 CREATE INDEX IF NOT EXISTS idx_videos_created_at ON public.videos(created_at DESC);
 
 -- ========================================================
--- 2. Enable Row Level Security (RLS) on 'videos'
--- ========================================================
-ALTER TABLE public.videos ENABLE ROW LEVEL SECURITY;
-
--- Allow users to view only their own videos
-CREATE POLICY "Users can view own videos"
-    ON public.videos
-    FOR SELECT
-    TO authenticated
-    USING (auth.uid() = user_id);
-
--- Allow users to insert their own videos
-CREATE POLICY "Users can insert own videos"
-    ON public.videos
-    FOR INSERT
-    TO authenticated
-    WITH CHECK (auth.uid() = user_id);
-
--- Allow users to update their own videos (e.g. rename)
-CREATE POLICY "Users can update own videos"
-    ON public.videos
-    FOR UPDATE
-    TO authenticated
-    USING (auth.uid() = user_id)
-    WITH CHECK (auth.uid() = user_id);
-
--- Allow users to delete their own videos
-CREATE POLICY "Users can delete own videos"
-    ON public.videos
-    FOR DELETE
-    TO authenticated
-    USING (auth.uid() = user_id);
-
--- ========================================================
--- 3. Create Private Storage Bucket 'videos'
+-- 2. Create Private Storage Bucket 'videos'
 -- ========================================================
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 VALUES (
@@ -115,45 +86,35 @@ ON CONFLICT (id) DO UPDATE SET
     allowed_mime_types = ARRAY['video/mp4', 'video/quicktime', 'video/webm'];
 
 -- ========================================================
--- 4. Enable Row Level Security on Storage Objects
+-- 3. Row Level Security (RLS) Notes
 -- ========================================================
--- Allow authenticated users to upload to their own user folder: <user_id>/...
-CREATE POLICY "Users can upload own storage videos"
-    ON storage.objects
-    FOR INSERT
-    TO authenticated
-    WITH CHECK (
-        bucket_id = 'videos'
-        AND (storage.foldername(name))[1] = auth.uid()::text
-    );
-
--- Allow authenticated users to access their own files in the bucket
-CREATE POLICY "Users can access own storage videos"
-    ON storage.objects
-    FOR SELECT
-    TO authenticated
-    USING (
-        bucket_id = 'videos'
-        AND (storage.foldername(name))[1] = auth.uid()::text
-    );
-
--- Allow authenticated users to update their own files in the bucket
-CREATE POLICY "Users can update own storage videos"
-    ON storage.objects
-    FOR UPDATE
-    TO authenticated
-    USING (
-        bucket_id = 'videos'
-        AND (storage.foldername(name))[1] = auth.uid()::text
-    );
-
--- Allow authenticated users to delete their own files from the bucket
-CREATE POLICY "Users can delete own storage videos"
-    ON storage.objects
-    FOR DELETE
-    TO authenticated
-    USING (
-        bucket_id = 'videos'
-        AND (storage.foldername(name))[1] = auth.uid()::text
-    );
+-- When AUTH_REQUIRED is false (default):
+-- Operations are performed by the backend service role key, bypassing RLS.
+--
+-- When you enable AUTH_REQUIRED="true" and want strict per-user RLS in Supabase,
+-- you can enable RLS on the table and bucket with the following policies:
+--
+-- ALTER TABLE public.videos ENABLE ROW LEVEL SECURITY;
+--
+-- CREATE POLICY "Users can view own videos"
+--     ON public.videos FOR SELECT TO authenticated
+--     USING (auth.uid()::text = user_id);
+--
+-- CREATE POLICY "Users can insert own videos"
+--     ON public.videos FOR INSERT TO authenticated
+--     WITH CHECK (auth.uid()::text = user_id);
+--
+-- CREATE POLICY "Users can update own videos"
+--     ON public.videos FOR UPDATE TO authenticated
+--     USING (auth.uid()::text = user_id)
+--     WITH CHECK (auth.uid()::text = user_id);
+--
+-- CREATE POLICY "Users can delete own videos"
+--     ON public.videos FOR DELETE TO authenticated
+--     USING (auth.uid()::text = user_id);
+--
+-- CREATE POLICY "Users can access own storage videos"
+--     ON storage.objects FOR ALL TO authenticated
+--     USING (bucket_id = 'videos' AND (storage.foldername(name))[1] = auth.uid()::text)
+--     WITH CHECK (bucket_id = 'videos' AND (storage.foldername(name))[1] = auth.uid()::text);
 ```

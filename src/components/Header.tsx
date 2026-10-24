@@ -3,7 +3,7 @@ import { PlaySquare } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 export const Header: React.FC = () => {
-  const { user } = useAuth();
+  const { user, authRequired } = useAuth();
 
   return (
     <header className="sticky top-0 z-30 bg-slate-950/90 backdrop-blur-md border-b border-slate-800/80 px-4 h-14 flex items-center justify-between gap-4">
@@ -17,8 +17,8 @@ export const Header: React.FC = () => {
         </span>
       </div>
 
-      {/* User Info / State */}
-      {user && (
+      {/* User Info / State - only shown if AUTH_REQUIRED is enabled */}
+      {authRequired && user?.email && (
         <div className="text-xs text-slate-400 truncate max-w-[180px]">
           <span className="text-slate-300 font-medium">{user.email}</span>
         </div>

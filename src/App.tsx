@@ -7,7 +7,7 @@ import React, { useState } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { Header } from './components/Header';
 import { BottomNav, TabType } from './components/BottomNav';
-import { SupabaseNotConnected } from './components/SupabaseNotConnected';
+import { WarningBanner } from './components/WarningBanner';
 import { AuthPage } from './pages/AuthPage';
 import { LibraryPage } from './pages/LibraryPage';
 import { UploadPage } from './pages/UploadPage';
@@ -17,7 +17,7 @@ import { VideoItem } from './types';
 import { RefreshCw } from 'lucide-react';
 
 function AppContent() {
-  const { user, loading, configStatus } = useAuth();
+  const { user, loading, authRequired } = useAuth();
   const [activeTab, setActiveTab] = useState<TabType>('library');
   const [previewVideo, setPreviewVideo] = useState<VideoItem | null>(null);
 
@@ -30,19 +30,21 @@ function AppContent() {
     );
   }
 
-  // If Supabase credentials are not configured, display clear connection banner/state
-  if (!configStatus?.configured) {
-    return <SupabaseNotConnected />;
+  // If AUTH_REQUIRED is explicitly turned on and user is not signed in, display auth gate
+  if (authRequired && !user) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
+        <WarningBanner />
+        <AuthPage />
+      </div>
+    );
   }
 
-  // If user is not authenticated, display login/signup flow
-  if (!user) {
-    return <AuthPage />;
-  }
-
+  // App ALWAYS opens directly: Header, WarningBanner (if unconfigured), Active Tab, and BottomNav
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
       <Header />
+      <WarningBanner />
 
       <main className="flex-1 overflow-y-auto">
         {activeTab === 'library' && (

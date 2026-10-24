@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { UploadCloud, FileVideo, CheckCircle2, AlertCircle, RefreshCw, X, ArrowRight } from 'lucide-react';
 import { api } from '../services/api';
 import { VideoItem } from '../types';
+import { useAuth } from '../context/AuthContext';
 
 interface UploadPageProps {
   onUploadSuccess: (video: VideoItem) => void;
@@ -13,6 +14,7 @@ const ALLOWED_EXTS = ['.mp4', '.mov', '.webm'];
 const ALLOWED_MIMES = ['video/mp4', 'video/quicktime', 'video/webm'];
 
 export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess, onGoToLibrary }) => {
+  const { configStatus, checkStatus } = useAuth();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [customName, setCustomName] = useState<string>('');
@@ -25,6 +27,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess, onGoToL
 
   const [error, setError] = useState<string | null>(null);
   const [uploadedVideo, setUploadedVideo] = useState<VideoItem | null>(null);
+  const [rechecking, setRechecking] = useState<boolean>(false);
 
   const validateAndSetFile = (file: File) => {
     setError(null);
@@ -67,10 +70,25 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess, onGoToL
     }
   };
 
+  const handleRecheckConnection = async () => {
+    setRechecking(true);
+    const status = await checkStatus();
+    setRechecking(false);
+    if (status.configured) {
+      setError(null);
+    }
+  };
+
   const handleStartUpload = async () => {
     if (!selectedFile) return;
 
     setError(null);
+    const status = await checkStatus();
+    if (!status.configured) {
+      setError('Supabase is not connected. Video uploads cannot be processed until Supabase credentials are configured in Settings > Secrets.');
+      return;
+    }
+
     setUploading(true);
     setProgressPercent(0);
     setBytesUploaded(0);
@@ -127,15 +145,26 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess, onGoToL
             <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
             <p className="flex-1 leading-relaxed">{error}</p>
           </div>
-          {selectedFile && !uploading && (
-            <button
-              onClick={handleStartUpload}
-              className="self-start px-3 py-1.5 rounded-lg bg-rose-600/30 hover:bg-rose-600/40 text-rose-200 text-xs font-medium flex items-center gap-1.5 transition-colors"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>Retry Upload</span>
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {error.includes('Supabase is not connected') ? (
+              <button
+                onClick={handleRecheckConnection}
+                disabled={rechecking}
+                className="self-start px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 text-xs font-medium flex items-center gap-1.5 transition-colors disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${rechecking ? 'animate-spin' : ''}`} />
+                <span>{rechecking ? 'Checking...' : 'Check Connection'}</span>
+              </button>
+            ) : selectedFile && !uploading ? (
+              <button
+                onClick={handleStartUpload}
+                className="self-start px-3 py-1.5 rounded-lg bg-rose-600/30 hover:bg-rose-600/40 text-rose-200 text-xs font-medium flex items-center gap-1.5 transition-colors"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Retry Upload</span>
+              </button>
+            ) : null}
+          </div>
         </div>
       )}
 
