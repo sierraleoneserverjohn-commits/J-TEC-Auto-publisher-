@@ -1,15 +1,26 @@
-export type CaptionPosition = 'top' | 'center' | 'bottom';
 export type CaptionSize = 'small' | 'medium' | 'large';
 export type CaptionColor = 'white' | 'yellow' | 'black';
+export type CaptionStyle = 'clean' | 'box' | 'outline';
 export type VideoLook = 'none' | 'cinematic' | 'warm' | 'cool' | 'bw' | 'vivid';
 export type VideoZoom = 'none' | 'slow_in' | 'slow_out';
+export type BrandPosition = 'bottom_center' | 'bottom_left' | 'bottom_right' | 'top_center';
 
-export interface CaptionConfig {
+export interface PlanTextItem {
+  id?: string;
   content: string;
-  position: CaptionPosition;
+  x: number; // 0.05 - 0.95 center fraction
+  y: number; // 0.05 - 0.95 center fraction
   size: CaptionSize;
   color: CaptionColor;
-  fade_in: number;
+  style: CaptionStyle;
+  start: number; // seconds on final video
+  end: number | null; // seconds on final video or null
+  fade_in: number; // 0 - 3
+}
+
+export interface BrandTagConfig {
+  content: string; // max 30 chars
+  position: BrandPosition;
 }
 
 export interface TrimConfig {
@@ -18,29 +29,38 @@ export interface TrimConfig {
 }
 
 export interface RenderPlan {
-  text?: CaptionConfig;
+  texts: PlanTextItem[];
+  brand?: BrandTagConfig;
   look: VideoLook;
   zoom: VideoZoom;
   speed: number;
   trim: TrimConfig;
   fade_in: number;
   fade_out: number;
+  // Legacy single text compatibility
+  text?: {
+    content: string;
+    position: 'top' | 'center' | 'bottom';
+    size: CaptionSize;
+    color: CaptionColor;
+    fade_in: number;
+  };
 }
 
-export const ALLOWED_POSITIONS: CaptionPosition[] = ['top', 'center', 'bottom'];
 export const ALLOWED_SIZES: CaptionSize[] = ['small', 'medium', 'large'];
 export const ALLOWED_COLORS: CaptionColor[] = ['white', 'yellow', 'black'];
+export const ALLOWED_STYLES: CaptionStyle[] = ['clean', 'box', 'outline'];
 export const ALLOWED_LOOKS: VideoLook[] = ['none', 'cinematic', 'warm', 'cool', 'bw', 'vivid'];
 export const ALLOWED_ZOOMS: VideoZoom[] = ['none', 'slow_in', 'slow_out'];
+export const ALLOWED_BRAND_POSITIONS: BrandPosition[] = [
+  'bottom_center',
+  'bottom_left',
+  'bottom_right',
+  'top_center',
+];
 
 export const DEFAULT_PLAN: RenderPlan = {
-  text: {
-    content: '',
-    position: 'bottom',
-    size: 'medium',
-    color: 'white',
-    fade_in: 0,
-  },
+  texts: [],
   look: 'none',
   zoom: 'none',
   speed: 1,
@@ -58,7 +78,18 @@ export function validateAndSanitizePlan(input: any): RenderPlan {
   }
 
   // Strict whitelist of top-level keys
-  const allowedTopKeys = new Set(['text', 'look', 'zoom', 'speed', 'trim', 'fade_in', 'fade_out']);
+  const allowedTopKeys = new Set([
+    'texts',
+    'brand',
+    'look',
+    'zoom',
+    'speed',
+    'trim',
+    'fade_in',
+    'fade_out',
+    'text', // legacy
+  ]);
+
   for (const key of Object.keys(input)) {
     if (!allowedTopKeys.has(key)) {
       throw new Error(`Unexpected plan property: "${key}".`);
@@ -116,54 +147,152 @@ export function validateAndSanitizePlan(input: any): RenderPlan {
     };
   }
 
-  // Validate text/caption
-  let textConfig: CaptionConfig | undefined = undefined;
-  if (input.text !== undefined && input.text !== null) {
-    if (typeof input.text !== 'object' || Array.isArray(input.text)) {
-      throw new Error('Text configuration must be an object.');
+  // Validate brand (optional)
+  let brandConfig: BrandTagConfig | undefined = undefined;
+  if (input.brand !== undefined && input.brand !== null) {
+    if (typeof input.brand !== 'object' || Array.isArray(input.brand)) {
+      throw new Error('Brand must be an object with content and position.');
     }
-    const allowedTextKeys = new Set(['content', 'position', 'size', 'color', 'fade_in']);
-    for (const key of Object.keys(input.text)) {
-      if (!allowedTextKeys.has(key)) {
-        throw new Error(`Unexpected text property: "${key}".`);
+    const allowedBrandKeys = new Set(['content', 'position']);
+    for (const key of Object.keys(input.brand)) {
+      if (!allowedBrandKeys.has(key)) {
+        throw new Error(`Unexpected brand property: "${key}".`);
       }
     }
 
-    const content = typeof input.text.content === 'string' ? input.text.content : '';
-    if (content.length > 200) {
-      throw new Error('Caption content cannot exceed 200 characters.');
+    const content = typeof input.brand.content === 'string' ? input.brand.content.trim() : '';
+    if (content.length > 30) {
+      throw new Error('Brand tag content cannot exceed 30 characters.');
     }
 
-    const position = input.text.position ?? 'bottom';
-    if (!ALLOWED_POSITIONS.includes(position)) {
-      throw new Error(`Invalid caption position: "${position}". Must be one of: ${ALLOWED_POSITIONS.join(', ')}.`);
+    const position = input.brand.position ?? 'bottom_center';
+    if (!ALLOWED_BRAND_POSITIONS.includes(position)) {
+      throw new Error(
+        `Invalid brand position: "${position}". Must be one of: ${ALLOWED_BRAND_POSITIONS.join(', ')}.`
+      );
     }
 
-    const size = input.text.size ?? 'medium';
-    if (!ALLOWED_SIZES.includes(size)) {
-      throw new Error(`Invalid caption size: "${size}". Must be one of: ${ALLOWED_SIZES.join(', ')}.`);
+    if (content) {
+      brandConfig = { content, position };
+    }
+  }
+
+  // Validate texts list (max 6 items)
+  const sanitizedTexts: PlanTextItem[] = [];
+  if (Array.isArray(input.texts)) {
+    if (input.texts.length > 6) {
+      throw new Error('Maximum of 6 text overlays allowed per video.');
     }
 
-    const color = input.text.color ?? 'white';
-    if (!ALLOWED_COLORS.includes(color)) {
-      throw new Error(`Invalid caption color: "${color}". Must be one of: ${ALLOWED_COLORS.join(', ')}.`);
+    const allowedItemKeys = new Set([
+      'id',
+      'content',
+      'x',
+      'y',
+      'size',
+      'color',
+      'style',
+      'start',
+      'end',
+      'fade_in',
+    ]);
+
+    for (let i = 0; i < input.texts.length; i++) {
+      const item = input.texts[i];
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        throw new Error(`Text item at index ${i} must be a valid object.`);
+      }
+
+      for (const k of Object.keys(item)) {
+        if (!allowedItemKeys.has(k)) {
+          throw new Error(`Unexpected property "${k}" in text item at index ${i}.`);
+        }
+      }
+
+      const content = typeof item.content === 'string' ? item.content.trim() : '';
+      if (!content) {
+        continue; // skip empty text items
+      }
+      if (content.length > 200) {
+        throw new Error(`Text item at index ${i} content exceeds 200 characters.`);
+      }
+
+      // x, y: fractions clamped between 0.05 and 0.95
+      let x = typeof item.x === 'number' && !isNaN(item.x) ? item.x : 0.5;
+      x = Math.min(Math.max(Number(x.toFixed(3)), 0.05), 0.95);
+
+      let y = typeof item.y === 'number' && !isNaN(item.y) ? item.y : 0.88;
+      y = Math.min(Math.max(Number(y.toFixed(3)), 0.05), 0.95);
+
+      const size = item.size ?? 'medium';
+      if (!ALLOWED_SIZES.includes(size)) {
+        throw new Error(
+          `Invalid text size "${size}" at index ${i}. Must be one of: ${ALLOWED_SIZES.join(', ')}.`
+        );
+      }
+
+      const color = item.color ?? 'white';
+      if (!ALLOWED_COLORS.includes(color)) {
+        throw new Error(
+          `Invalid text color "${color}" at index ${i}. Must be one of: ${ALLOWED_COLORS.join(', ')}.`
+        );
+      }
+
+      const style = item.style ?? 'clean';
+      if (!ALLOWED_STYLES.includes(style)) {
+        throw new Error(
+          `Invalid text style "${style}" at index ${i}. Must be one of: ${ALLOWED_STYLES.join(', ')}.`
+        );
+      }
+
+      const start = Math.max(0, typeof item.start === 'number' && !isNaN(item.start) ? Number(item.start.toFixed(1)) : 0);
+      let end: number | null = null;
+      if (typeof item.end === 'number' && !isNaN(item.end) && item.end > 0) {
+        end = Number(item.end.toFixed(1));
+        if (end <= start) {
+          throw new Error(`Text item at index ${i} end time (${end}s) must be greater than start time (${start}s).`);
+        }
+      }
+
+      let textFadeIn = typeof item.fade_in === 'number' && !isNaN(item.fade_in) ? item.fade_in : 0;
+      textFadeIn = Math.min(Math.max(Math.round(textFadeIn), 0), 3);
+
+      sanitizedTexts.push({
+        id: typeof item.id === 'string' ? item.id : undefined,
+        content,
+        x,
+        y,
+        size,
+        color,
+        style,
+        start,
+        end,
+        fade_in: textFadeIn,
+      });
     }
-
-    let textFadeIn = typeof input.text.fade_in === 'number' ? input.text.fade_in : 0;
-    if (isNaN(textFadeIn)) throw new Error('Caption fade_in must be a number.');
-    textFadeIn = Math.min(Math.max(Math.round(textFadeIn), 0), 3);
-
-    textConfig = {
-      content,
-      position,
-      size,
-      color,
-      fade_in: textFadeIn,
-    };
+  } else if (input.text && typeof input.text === 'object') {
+    // Backwards compatibility for single text
+    const content = typeof input.text.content === 'string' ? input.text.content.trim() : '';
+    if (content) {
+      const pos = input.text.position ?? 'bottom';
+      const y = pos === 'top' ? 0.12 : pos === 'center' ? 0.5 : 0.88;
+      sanitizedTexts.push({
+        content: content.slice(0, 200),
+        x: 0.5,
+        y,
+        size: input.text.size ?? 'medium',
+        color: input.text.color ?? 'white',
+        style: 'box',
+        start: 0,
+        end: null,
+        fade_in: Math.min(Math.max(Number(input.text.fade_in || 0), 0), 3),
+      });
+    }
   }
 
   return {
-    text: textConfig,
+    texts: sanitizedTexts,
+    brand: brandConfig,
     look,
     zoom,
     speed,

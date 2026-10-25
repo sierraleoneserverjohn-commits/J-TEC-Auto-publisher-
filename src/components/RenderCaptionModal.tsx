@@ -10,21 +10,28 @@ import {
   RotateCcw,
   Sliders,
   Scissors,
-  Eye,
   Sparkles,
   Gauge,
   Maximize2,
+  Plus,
+  Trash2,
+  Play,
+  Pause,
+  Tag,
 } from 'lucide-react';
 import { VideoItem, RenderStatusResponse } from '../types';
 import {
   RenderPlan,
-  CaptionPosition,
+  PlanTextItem,
   CaptionSize,
   CaptionColor,
+  CaptionStyle,
   VideoLook,
   VideoZoom,
+  BrandTagConfig,
   DEFAULT_PLAN,
 } from '../../shared/plan';
+import { getStoredBrandTag, StoredBrandTag } from '../utils/brandTag';
 import { api } from '../services/api';
 
 interface RenderCaptionModalProps {
@@ -41,15 +48,16 @@ export const RenderCaptionModal: React.FC<RenderCaptionModalProps> = ({
   onRefreshLibrary,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const previewBoxRef = useRef<HTMLDivElement | null>(null);
+
   const [streamUrl, setStreamUrl] = useState<string | null>(video.preview_url || null);
   const [duration, setDuration] = useState<number>(0);
+  const [currentTime, setCurrentTime] = useState<number>(0);
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
 
   // Editor Plan States
-  const [captionText, setCaptionText] = useState<string>('');
-  const [captionPosition, setCaptionPosition] = useState<CaptionPosition>('bottom');
-  const [captionSize, setCaptionSize] = useState<CaptionSize>('medium');
-  const [captionColor, setCaptionColor] = useState<CaptionColor>('white');
-  const [captionFadeIn, setCaptionFadeIn] = useState<number>(0);
+  const [texts, setTexts] = useState<PlanTextItem[]>([]);
+  const [selectedTextId, setSelectedTextId] = useState<string | null>(null);
 
   const [look, setLook] = useState<VideoLook>('none');
   const [zoom, setZoom] = useState<VideoZoom>('none');
@@ -59,23 +67,36 @@ export const RenderCaptionModal: React.FC<RenderCaptionModalProps> = ({
   const [videoFadeIn, setVideoFadeIn] = useState<number>(0);
   const [videoFadeOut, setVideoFadeOut] = useState<number>(0);
 
+  // Brand tag settings
+  const [storedBrand, setStoredBrand] = useState<StoredBrandTag>({
+    enabled: false,
+    content: '',
+    position: 'bottom_center',
+  });
+  const [includeBrandTag, setIncludeBrandTag] = useState<boolean>(false);
+
+  // Dragging state
+  const draggingIdRef = useRef<string | null>(null);
+
   // Workflow / Run Status
   const [panelState, setPanelState] = useState<PanelState>('idle');
   const [runStatus, setRunStatus] = useState<RenderStatusResponse | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Fetch short-lived streaming URL if needed
+  // Load stream URL and stored brand tag on mount
   useEffect(() => {
     let isMounted = true;
+    const brand = getStoredBrandTag();
+    setStoredBrand(brand);
+    setIncludeBrandTag(brand.enabled && Boolean(brand.content));
+
     api
       .getSignedUrl(video.id, false)
       .then((url) => {
         if (isMounted) setStreamUrl(url);
       })
-      .catch(() => {
-        // Fall back to preview_url if present
-      });
+      .catch(() => {});
 
     return () => {
       isMounted = false;
@@ -85,6 +106,7 @@ export const RenderCaptionModal: React.FC<RenderCaptionModalProps> = ({
     };
   }, [video.id]);
 
+  // Video metadata duration
   const handleLoadedMetadata = () => {
     if (videoRef.current && videoRef.current.duration) {
       const dur = Number(videoRef.current.duration.toFixed(1));
@@ -95,12 +117,126 @@ export const RenderCaptionModal: React.FC<RenderCaptionModalProps> = ({
     }
   };
 
+  // Video time update loop for live preview
+  const handleTimeUpdate = () => {
+    if (!videoRef.current) return;
+    const t = videoRef.current.currentTime;
+    setCurrentTime(t);
+
+    const effectiveEnd = trimEnd > 0 ? trimEnd : duration;
+
+    // Enforce trim boundaries during playback
+    if (t >= effectiveEnd && effectiveEnd > 0) {
+      videoRef.current.pause();
+      videoRef.current.currentTime = trimStart;
+      setIsPlaying(false);
+    } else if (t < trimStart) {
+      videoRef.current.currentTime = trimStart;
+    }
+  };
+
+  // Sync speed changes to playbackRate
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.playbackRate = speed;
+    }
+  }, [speed]);
+
+  const togglePlayPause = () => {
+    if (!videoRef.current) return;
+    if (isPlaying) {
+      videoRef.current.pause();
+      setIsPlaying(false);
+    } else {
+      const effectiveEnd = trimEnd > 0 ? trimEnd : duration;
+      if (videoRef.current.currentTime >= effectiveEnd || videoRef.current.currentTime < trimStart) {
+        videoRef.current.currentTime = trimStart;
+      }
+      videoRef.current.play().catch(() => {});
+      setIsPlaying(true);
+    }
+  };
+
+  const handleScrub = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = parseFloat(e.target.value);
+    setCurrentTime(val);
+    if (videoRef.current) {
+      videoRef.current.currentTime = val;
+    }
+  };
+
+  // Text management
+  const handleAddText = () => {
+    if (texts.length >= 6) return;
+    const newId = `txt_${Date.now()}`;
+    const newItem: PlanTextItem = {
+      id: newId,
+      content: `Text ${texts.length + 1}`,
+      x: 0.5,
+      y: texts.length === 0 ? 0.82 : 0.5,
+      size: 'medium',
+      color: 'white',
+      style: 'clean',
+      start: 0,
+      end: null,
+      fade_in: 0,
+    };
+    setTexts((prev) => [...prev, newItem]);
+    setSelectedTextId(newId);
+  };
+
+  const handleDeleteSelectedText = () => {
+    if (!selectedTextId) return;
+    setTexts((prev) => prev.filter((t) => t.id !== selectedTextId));
+    setSelectedTextId(null);
+  };
+
+  const updateSelectedText = (patch: Partial<PlanTextItem>) => {
+    if (!selectedTextId) return;
+    setTexts((prev) =>
+      prev.map((t) => (t.id === selectedTextId ? { ...t, ...patch } : t))
+    );
+  };
+
+  const selectedText = texts.find((t) => t.id === selectedTextId);
+
+  // Dragging handlers for text
+  const handlePointerDown = (id: string, e: React.PointerEvent) => {
+    e.stopPropagation();
+    setSelectedTextId(id);
+    draggingIdRef.current = id;
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    if (!draggingIdRef.current || !previewBoxRef.current) return;
+    const rect = previewBoxRef.current.getBoundingClientRect();
+    const rawX = (e.clientX - rect.left) / rect.width;
+    const rawY = (e.clientY - rect.top) / rect.height;
+
+    const clampedX = Math.min(Math.max(Number(rawX.toFixed(3)), 0.05), 0.95);
+    const clampedY = Math.min(Math.max(Number(rawY.toFixed(3)), 0.05), 0.95);
+
+    const targetId = draggingIdRef.current;
+    setTexts((prev) =>
+      prev.map((item) =>
+        item.id === targetId ? { ...item, x: clampedX, y: clampedY } : item
+      )
+    );
+  };
+
+  const handlePointerUp = (e: React.PointerEvent) => {
+    if (draggingIdRef.current) {
+      try {
+        (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {}
+      draggingIdRef.current = null;
+    }
+  };
+
   const handleReset = () => {
-    setCaptionText('');
-    setCaptionPosition('bottom');
-    setCaptionSize('medium');
-    setCaptionColor('white');
-    setCaptionFadeIn(0);
+    setTexts([]);
+    setSelectedTextId(null);
     setLook('none');
     setZoom('none');
     setSpeed(1);
@@ -108,23 +244,25 @@ export const RenderCaptionModal: React.FC<RenderCaptionModalProps> = ({
     setTrimEnd(duration);
     setVideoFadeIn(0);
     setVideoFadeOut(0);
+    setIncludeBrandTag(storedBrand.enabled && Boolean(storedBrand.content));
     setErrorMessage(null);
+    if (videoRef.current) {
+      videoRef.current.playbackRate = 1;
+      videoRef.current.currentTime = 0;
+    }
   };
 
-  // Has at least one option been modified?
+  // Change detection
   const isChanged = Boolean(
-    captionText.trim() !== '' ||
-      captionPosition !== 'bottom' ||
-      captionSize !== 'medium' ||
-      captionColor !== 'white' ||
-      captionFadeIn !== 0 ||
+    texts.length > 0 ||
       look !== 'none' ||
       zoom !== 'none' ||
       speed !== 1 ||
       trimStart > 0 ||
       (duration > 0 && trimEnd > 0 && Math.abs(trimEnd - duration) > 0.1) ||
       videoFadeIn !== 0 ||
-      videoFadeOut !== 0
+      videoFadeOut !== 0 ||
+      (storedBrand.enabled && storedBrand.content && !includeBrandTag) // toggled off brand
   );
 
   const clearPolling = () => {
@@ -162,7 +300,6 @@ export const RenderCaptionModal: React.FC<RenderCaptionModalProps> = ({
   const handleStartRender = async () => {
     if (!isChanged) return;
 
-    // Validate trim range
     if (trimEnd > 0 && trimStart >= trimEnd) {
       setErrorMessage('Trim start must be less than trim end.');
       return;
@@ -172,8 +309,18 @@ export const RenderCaptionModal: React.FC<RenderCaptionModalProps> = ({
     setPanelState('dispatching');
     clearPolling();
 
-    // Construct Plan matching shared/plan.ts schema
+    // Construct Plan
+    const brandPayload: BrandTagConfig | undefined =
+      includeBrandTag && storedBrand.content
+        ? {
+            content: storedBrand.content,
+            position: storedBrand.position,
+          }
+        : undefined;
+
     const plan: RenderPlan = {
+      texts: texts.map(({ id, ...rest }) => rest),
+      brand: brandPayload,
       look,
       zoom,
       speed,
@@ -184,16 +331,6 @@ export const RenderCaptionModal: React.FC<RenderCaptionModalProps> = ({
       fade_in: videoFadeIn,
       fade_out: videoFadeOut,
     };
-
-    if (captionText.trim()) {
-      plan.text = {
-        content: captionText.trim(),
-        position: captionPosition,
-        size: captionSize,
-        color: captionColor,
-        fade_in: captionFadeIn,
-      };
-    }
 
     try {
       await api.renderPlan(video.id, plan);
@@ -215,11 +352,58 @@ export const RenderCaptionModal: React.FC<RenderCaptionModalProps> = ({
     onClose();
   };
 
-  // Build chosen options summary
+  // Preview Calculations
+  const effectiveEnd = trimEnd > 0 ? trimEnd : duration;
+  const effectiveDuration = Math.max(0.1, effectiveEnd - trimStart);
+  const editedTime = Math.max(0, (currentTime - trimStart) / speed);
+  const finalDuration = effectiveDuration / speed;
+
+  // Zoom scale
+  const zoomProgress = effectiveDuration > 0 ? Math.max(0, Math.min(1, (currentTime - trimStart) / effectiveDuration)) : 0;
+  let zoomScale = 1;
+  if (zoom === 'slow_in') zoomScale = 1 + 0.15 * zoomProgress;
+  else if (zoom === 'slow_out') zoomScale = 1.15 - 0.15 * zoomProgress;
+
+  // CSS Filter for Look
+  const getLookFilterStyle = () => {
+    switch (look) {
+      case 'cinematic':
+        return 'contrast(1.12) saturate(1.12)';
+      case 'warm':
+        return 'sepia(0.25) saturate(1.1) contrast(1.04)';
+      case 'cool':
+        return 'hue-rotate(185deg) sepia(0.15) saturate(1.05)';
+      case 'bw':
+        return 'grayscale(1) contrast(1.1)';
+      case 'vivid':
+        return 'saturate(1.4) contrast(1.06)';
+      case 'none':
+      default:
+        return 'none';
+    }
+  };
+
+  // Video Fade Opacity
+  let fadeBlackOpacity = 0;
+  if (videoFadeIn > 0 && editedTime < videoFadeIn) {
+    fadeBlackOpacity = (videoFadeIn - editedTime) / videoFadeIn;
+  }
+  if (videoFadeOut > 0 && finalDuration > 0) {
+    const timeLeft = finalDuration - editedTime;
+    if (timeLeft < videoFadeOut) {
+      const outOp = (videoFadeOut - Math.max(0, timeLeft)) / videoFadeOut;
+      fadeBlackOpacity = Math.max(fadeBlackOpacity, outOp);
+    }
+  }
+
+  // Summary builder
   const getOptionsSummary = () => {
     const parts: string[] = [];
-    if (captionText.trim()) {
-      parts.push(`Caption: ${captionPosition} (${captionColor}, ${captionSize}${captionFadeIn ? `, fade ${captionFadeIn}s` : ''})`);
+    if (texts.length > 0) {
+      parts.push(`${texts.length} text${texts.length > 1 ? 's' : ''}`);
+    }
+    if (includeBrandTag && storedBrand.content) {
+      parts.push(`Brand: "${storedBrand.content}"`);
     }
     if (look !== 'none') parts.push(`Look: ${look}`);
     if (zoom !== 'none') parts.push(`Zoom: ${zoom.replace('_', ' ')}`);
@@ -244,29 +428,11 @@ export const RenderCaptionModal: React.FC<RenderCaptionModalProps> = ({
     return runStatus?.status || 'processing';
   };
 
-  // Approximate caption styling classes
-  const getCaptionPreviewPositionClass = () => {
-    switch (captionPosition) {
-      case 'top':
-        return 'top-3 inset-x-3 items-start justify-center';
-      case 'center':
-        return 'inset-3 items-center justify-center';
-      case 'bottom':
-      default:
-        return 'bottom-3 inset-x-3 items-end justify-center';
-    }
-  };
-
-  const getCaptionPreviewStyleClass = () => {
-    let sizeClass = 'text-xs px-2.5 py-1';
-    if (captionSize === 'medium') sizeClass = 'text-sm px-3.5 py-1.5';
-    if (captionSize === 'large') sizeClass = 'text-base px-4 py-2 font-semibold';
-
-    let colorClass = 'text-white bg-black/60';
-    if (captionColor === 'yellow') colorClass = 'text-yellow-300 bg-black/60';
-    if (captionColor === 'black') colorClass = 'text-black bg-white/80';
-
-    return `${sizeClass} ${colorClass} rounded-lg backdrop-blur-xs text-center max-w-[90%] shadow-md`;
+  const formatTime = (secs: number) => {
+    const s = Math.max(0, Math.floor(secs));
+    const m = Math.floor(s / 60);
+    const rem = s % 60;
+    return `${m}:${rem < 10 ? '0' : ''}${rem}`;
   };
 
   return (
@@ -279,10 +445,11 @@ export const RenderCaptionModal: React.FC<RenderCaptionModalProps> = ({
               <Clapperboard className="w-4 h-4" />
             </div>
             <div className="min-w-0">
-              <h3 className="text-sm font-semibold text-slate-100 truncate">Video Editor</h3>
+              <h3 className="text-sm font-semibold text-slate-100 truncate">Interactive Video Editor</h3>
               <p className="text-xs text-slate-400 truncate">{video.name}</p>
             </div>
           </div>
+
           <div className="flex items-center gap-1">
             {panelState === 'idle' && (
               <button
@@ -307,122 +474,357 @@ export const RenderCaptionModal: React.FC<RenderCaptionModalProps> = ({
 
         {/* Scrollable Content */}
         <div className="p-4 space-y-4 overflow-y-auto">
-          {/* Video Preview at Top */}
-          <div className="space-y-1.5">
-            <div className="relative bg-black rounded-xl overflow-hidden aspect-video border border-slate-800">
+          {/* Live Interactive Preview Screen */}
+          <div className="space-y-2">
+            <div
+              ref={previewBoxRef}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              className="relative bg-black rounded-xl overflow-hidden aspect-video border border-slate-800 select-none touch-none"
+            >
               <video
                 ref={videoRef}
                 src={streamUrl || undefined}
-                controls
                 playsInline
+                muted
                 onLoadedMetadata={handleLoadedMetadata}
-                className="w-full h-full object-contain"
+                onTimeUpdate={handleTimeUpdate}
+                style={{
+                  filter: getLookFilterStyle(),
+                  transform: `scale(${zoomScale})`,
+                  transformOrigin: 'center center',
+                  transition: 'transform 0.05s linear',
+                }}
+                className="w-full h-full object-contain pointer-events-none"
               >
                 Video playback preview unavailable.
               </video>
 
-              {/* Approximate Caption Overlay Preview */}
-              {captionText.trim() && (
+              {/* Black Fades Overlay */}
+              {fadeBlackOpacity > 0 && (
                 <div
-                  className={`absolute pointer-events-none flex ${getCaptionPreviewPositionClass()}`}
-                >
-                  <div className={getCaptionPreviewStyleClass()}>
-                    {captionText}
+                  className="absolute inset-0 bg-black pointer-events-none transition-opacity duration-75"
+                  style={{ opacity: Math.min(1, fadeBlackOpacity) }}
+                />
+              )}
+
+              {/* Text Overlays */}
+              {texts.map((item) => {
+                const isSelected = item.id === selectedTextId;
+                const isTimeActive =
+                  editedTime >= item.start && (item.end === null || editedTime <= item.end);
+
+                if (!isTimeActive && panelState === 'idle' && !isSelected) {
+                  // Hide when outside active time range, unless currently selected for editing
+                  return null;
+                }
+
+                // Fade-in opacity
+                let textOpacity = 1;
+                if (item.fade_in > 0 && editedTime >= item.start) {
+                  const age = editedTime - item.start;
+                  if (age < item.fade_in) {
+                    textOpacity = Math.max(0.1, age / item.fade_in);
+                  }
+                }
+
+                // Text Size classes
+                const sizeStyle =
+                  item.size === 'small'
+                    ? 'text-xs'
+                    : item.size === 'medium'
+                    ? 'text-sm'
+                    : 'text-base font-bold';
+
+                // Text Color classes
+                const colorClass =
+                  item.color === 'yellow'
+                    ? 'text-yellow-300'
+                    : item.color === 'black'
+                    ? 'text-black'
+                    : 'text-white';
+
+                // Style appearance
+                let styleClass = '';
+                if (item.style === 'box') {
+                  styleClass = 'bg-black/60 px-2.5 py-1 rounded-md backdrop-blur-xs';
+                } else if (item.style === 'outline') {
+                  styleClass = '[text-shadow:_0_0_2px_#000,_0_0_4px_#000,_0_0_6px_#000]';
+                } else {
+                  styleClass = 'drop-shadow-[0_2px_4px_rgba(0,0,0,0.85)]';
+                }
+
+                return (
+                  <div
+                    key={item.id}
+                    onPointerDown={(e) => handlePointerDown(item.id!, e)}
+                    style={{
+                      left: `${item.x * 100}%`,
+                      top: `${item.y * 100}%`,
+                      transform: 'translate(-50%, -50%)',
+                      opacity: isTimeActive ? textOpacity : 0.45,
+                    }}
+                    className={`absolute cursor-move select-none touch-none flex items-center justify-center text-center max-w-[85%] ${
+                      isSelected ? 'ring-1.5 ring-purple-400 ring-offset-1 ring-offset-black/60 rounded' : ''
+                    }`}
+                  >
+                    <span className={`${sizeStyle} ${colorClass} ${styleClass} whitespace-pre-wrap leading-tight`}>
+                      {item.content || '(empty)'}
+                    </span>
                   </div>
+                );
+              })}
+
+              {/* Brand Tag in Preview */}
+              {includeBrandTag && storedBrand.content && (
+                <div
+                  className={`absolute pointer-events-none z-10 flex ${
+                    storedBrand.position === 'top_center'
+                      ? 'top-2 inset-x-0 justify-center'
+                      : storedBrand.position === 'bottom_left'
+                      ? 'bottom-2 left-2'
+                      : storedBrand.position === 'bottom_right'
+                      ? 'bottom-2 right-2'
+                      : 'bottom-2 inset-x-0 justify-center'
+                  }`}
+                >
+                  <span className="text-[10px] text-white/90 bg-black/60 px-2 py-0.5 rounded border border-white/10 backdrop-blur-xs font-medium">
+                    {storedBrand.content}
+                  </span>
                 </div>
               )}
             </div>
+
+            {/* Transport Scrub Bar & Play/Pause */}
+            <div className="flex items-center gap-2 px-1">
+              <button
+                type="button"
+                onClick={togglePlayPause}
+                className="w-8 h-8 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-center text-slate-300 hover:text-white"
+                aria-label={isPlaying ? 'Pause' : 'Play'}
+              >
+                {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 fill-slate-300 ml-0.5" />}
+              </button>
+
+              <input
+                type="range"
+                min={trimStart}
+                max={effectiveEnd > trimStart ? effectiveEnd : trimStart + 1}
+                step="0.05"
+                value={currentTime}
+                onChange={handleScrub}
+                className="flex-1 accent-purple-500 h-1.5 bg-slate-800 rounded-lg cursor-pointer"
+              />
+
+              <span className="text-[11px] font-mono text-slate-400 shrink-0">
+                {formatTime(currentTime)} / {formatTime(effectiveEnd)}
+              </span>
+            </div>
+
             <p className="text-[11px] text-slate-500 leading-tight px-1">
-              Approximate preview. Looks, zoom, speed and fades appear only in the final render.
+              Approximate preview. The final render is made by FFmpeg and may differ slightly.
             </p>
           </div>
 
-          {/* Controls (visible when idle) */}
+          {/* Controls when idle */}
           {panelState === 'idle' && (
             <div className="space-y-4">
-              {/* 1. Caption Section */}
+              {/* Text Overlays Management */}
               <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800/80 space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-slate-200 flex items-center gap-1.5">
+                  <span className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
                     <Type className="w-3.5 h-3.5 text-purple-400" />
-                    <span>Caption</span>
+                    <span>Text Overlays ({texts.length}/6)</span>
                   </span>
-                  <span className={`text-[11px] font-mono ${captionText.length > 200 ? 'text-rose-400' : 'text-slate-500'}`}>
-                    {captionText.length}/200
-                  </span>
+
+                  <button
+                    type="button"
+                    onClick={handleAddText}
+                    disabled={texts.length >= 6}
+                    className="min-h-[32px] px-2.5 rounded-lg bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 border border-purple-500/30 text-xs font-medium flex items-center gap-1 transition-colors disabled:opacity-40"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>Add Text</span>
+                  </button>
                 </div>
 
-                <input
-                  type="text"
-                  maxLength={200}
-                  value={captionText}
-                  onChange={(e) => setCaptionText(e.target.value)}
-                  placeholder="Enter overlay caption..."
-                  className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-slate-100 text-xs focus:outline-none focus:border-purple-500"
-                />
-
-                {/* Caption Position, Size, Color & Fade-In Grid */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-xs">
-                  {/* Position */}
-                  <div>
-                    <label className="block text-[11px] text-slate-400 mb-1">Position</label>
-                    <select
-                      value={captionPosition}
-                      onChange={(e) => setCaptionPosition(e.target.value as CaptionPosition)}
-                      className="w-full h-9 px-2 rounded-lg bg-slate-900 border border-slate-800 text-slate-200 text-xs focus:outline-none focus:border-purple-500"
-                    >
-                      <option value="top">Top</option>
-                      <option value="center">Center</option>
-                      <option value="bottom">Bottom</option>
-                    </select>
+                {/* Text Selector Tabs */}
+                {texts.length > 0 && (
+                  <div className="flex gap-1.5 overflow-x-auto pb-1">
+                    {texts.map((t, idx) => (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => setSelectedTextId(t.id!)}
+                        className={`min-h-[32px] px-3 py-1 rounded-lg text-xs font-medium shrink-0 transition-colors ${
+                          selectedTextId === t.id
+                            ? 'bg-purple-600 text-white shadow-sm'
+                            : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        #{idx + 1} {t.content.slice(0, 10) || 'Text'}
+                      </button>
+                    ))}
                   </div>
+                )}
 
-                  {/* Size */}
-                  <div>
-                    <label className="block text-[11px] text-slate-400 mb-1">Size</label>
-                    <select
-                      value={captionSize}
-                      onChange={(e) => setCaptionSize(e.target.value as CaptionSize)}
-                      className="w-full h-9 px-2 rounded-lg bg-slate-900 border border-slate-800 text-slate-200 text-xs focus:outline-none focus:border-purple-500"
-                    >
-                      <option value="small">Small</option>
-                      <option value="medium">Medium</option>
-                      <option value="large">Large</option>
-                    </select>
-                  </div>
+                {/* Selected Text Controls */}
+                {selectedText ? (
+                  <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-xl space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-slate-400 font-medium">Edit Selected Text</span>
+                      <button
+                        type="button"
+                        onClick={handleDeleteSelectedText}
+                        className="text-rose-400 hover:text-rose-300 text-xs flex items-center gap-1 p-1"
+                        title="Delete selected text"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Delete</span>
+                      </button>
+                    </div>
 
-                  {/* Color */}
-                  <div>
-                    <label className="block text-[11px] text-slate-400 mb-1">Color</label>
-                    <select
-                      value={captionColor}
-                      onChange={(e) => setCaptionColor(e.target.value as CaptionColor)}
-                      className="w-full h-9 px-2 rounded-lg bg-slate-900 border border-slate-800 text-slate-200 text-xs focus:outline-none focus:border-purple-500"
-                    >
-                      <option value="white">White</option>
-                      <option value="yellow">Yellow</option>
-                      <option value="black">Black</option>
-                    </select>
-                  </div>
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-[11px] text-slate-400">Content</label>
+                        <span className="text-[11px] font-mono text-slate-500">
+                          {selectedText.content.length}/200
+                        </span>
+                      </div>
+                      <textarea
+                        rows={2}
+                        maxLength={200}
+                        value={selectedText.content}
+                        onChange={(e) => updateSelectedText({ content: e.target.value })}
+                        placeholder="Enter text..."
+                        className="w-full p-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100 text-xs focus:outline-none focus:border-purple-500 resize-none"
+                      />
+                    </div>
 
-                  {/* Caption Fade-In */}
-                  <div>
-                    <label className="block text-[11px] text-slate-400 mb-1">Fade In</label>
-                    <select
-                      value={captionFadeIn}
-                      onChange={(e) => setCaptionFadeIn(Number(e.target.value))}
-                      className="w-full h-9 px-2 rounded-lg bg-slate-900 border border-slate-800 text-slate-200 text-xs focus:outline-none focus:border-purple-500"
-                    >
-                      <option value={0}>0s (None)</option>
-                      <option value={1}>1s</option>
-                      <option value={2}>2s</option>
-                      <option value={3}>3s</option>
-                    </select>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                      {/* Size */}
+                      <div>
+                        <label className="block text-[11px] text-slate-400 mb-1">Size</label>
+                        <select
+                          value={selectedText.size}
+                          onChange={(e) => updateSelectedText({ size: e.target.value as CaptionSize })}
+                          className="w-full h-8 px-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-200 text-xs focus:outline-none focus:border-purple-500"
+                        >
+                          <option value="small">Small</option>
+                          <option value="medium">Medium</option>
+                          <option value="large">Large</option>
+                        </select>
+                      </div>
+
+                      {/* Color */}
+                      <div>
+                        <label className="block text-[11px] text-slate-400 mb-1">Color</label>
+                        <select
+                          value={selectedText.color}
+                          onChange={(e) => updateSelectedText({ color: e.target.value as CaptionColor })}
+                          className="w-full h-8 px-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-200 text-xs focus:outline-none focus:border-purple-500"
+                        >
+                          <option value="white">White</option>
+                          <option value="yellow">Yellow</option>
+                          <option value="black">Black</option>
+                        </select>
+                      </div>
+
+                      {/* Style */}
+                      <div>
+                        <label className="block text-[11px] text-slate-400 mb-1">Style</label>
+                        <select
+                          value={selectedText.style}
+                          onChange={(e) => updateSelectedText({ style: e.target.value as CaptionStyle })}
+                          className="w-full h-8 px-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-200 text-xs focus:outline-none focus:border-purple-500"
+                        >
+                          <option value="clean">Clean (Shadow)</option>
+                          <option value="box">Box</option>
+                          <option value="outline">Outline</option>
+                        </select>
+                      </div>
+
+                      {/* Fade-In */}
+                      <div>
+                        <label className="block text-[11px] text-slate-400 mb-1">Fade In</label>
+                        <select
+                          value={selectedText.fade_in}
+                          onChange={(e) => updateSelectedText({ fade_in: Number(e.target.value) })}
+                          className="w-full h-8 px-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-200 text-xs focus:outline-none focus:border-purple-500"
+                        >
+                          <option value={0}>0s (None)</option>
+                          <option value={1}>1s</option>
+                          <option value={2}>2s</option>
+                          <option value={3}>3s</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Start and End Timers on Final Video */}
+                    <div className="grid grid-cols-2 gap-2 text-xs pt-1 border-t border-slate-800/60">
+                      <div>
+                        <label className="block text-[11px] text-slate-400 mb-1">Start (sec)</label>
+                        <input
+                          type="number"
+                          min={0}
+                          max={finalDuration}
+                          step="0.1"
+                          value={selectedText.start}
+                          onChange={(e) =>
+                            updateSelectedText({ start: Math.max(0, parseFloat(e.target.value) || 0) })
+                          }
+                          className="w-full h-8 px-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-200 text-xs font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] text-slate-400 mb-1">End (sec, blank=all)</label>
+                        <input
+                          type="number"
+                          min={selectedText.start}
+                          max={finalDuration}
+                          step="0.1"
+                          value={selectedText.end ?? ''}
+                          placeholder="End of video"
+                          onChange={(e) => {
+                            const val = e.target.value === '' ? null : parseFloat(e.target.value);
+                            updateSelectedText({ end: val });
+                          }}
+                          className="w-full h-8 px-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-200 text-xs font-mono"
+                        />
+                      </div>
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <p className="text-[11px] text-slate-500 italic">
+                    Tap "Add Text" or drag any text overlay directly on the preview to position it.
+                  </p>
+                )}
               </div>
 
-              {/* 2. Look & Zoom Section */}
+              {/* Brand Tag Switch for this video */}
+              {storedBrand.enabled && storedBrand.content && (
+                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2">
+                    <Tag className="w-3.5 h-3.5 text-purple-400" />
+                    <div>
+                      <span className="text-slate-200 font-medium">Brand Tag: </span>
+                      <span className="text-slate-400">"{storedBrand.content}"</span>
+                    </div>
+                  </div>
+
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={includeBrandTag}
+                      onChange={(e) => setIncludeBrandTag(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-slate-900 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-purple-600 border border-slate-800"></div>
+                  </label>
+                </div>
+              )}
+
+              {/* Look & Zoom Section */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {/* Look */}
                 <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800/80 space-y-2">
@@ -462,7 +864,7 @@ export const RenderCaptionModal: React.FC<RenderCaptionModalProps> = ({
                 </div>
               </div>
 
-              {/* 3. Speed Slider */}
+              {/* Speed Slider */}
               <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800/80 space-y-2">
                 <div className="flex items-center justify-between text-xs">
                   <span className="font-medium text-slate-200 flex items-center gap-1.5">
@@ -486,7 +888,7 @@ export const RenderCaptionModal: React.FC<RenderCaptionModalProps> = ({
                 </div>
               </div>
 
-              {/* 4. Trim Section */}
+              {/* Trim Section */}
               <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800/80 space-y-2">
                 <div className="flex items-center justify-between text-xs">
                   <span className="font-medium text-slate-200 flex items-center gap-1.5">
@@ -528,7 +930,7 @@ export const RenderCaptionModal: React.FC<RenderCaptionModalProps> = ({
                 </div>
               </div>
 
-              {/* 5. Video Fade In and Fade Out */}
+              {/* Video Fades */}
               <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800/80 space-y-2">
                 <span className="text-xs font-medium text-slate-200 flex items-center gap-1.5">
                   <Sliders className="w-3.5 h-3.5 text-purple-400" />

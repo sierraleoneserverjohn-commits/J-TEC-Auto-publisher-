@@ -6,28 +6,23 @@ Only whitelisted operations are applied. Unknown keys are ignored.
 """
 import json, os, subprocess, sys, textwrap
 
-FALLBACK_FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-FONT_CHOICES = ["Montserrat:semibold", "Roboto:medium", "Open Sans:semibold"]
-
-
-def pick_font():
-    """Use the first clean sans font that is really installed, else DejaVu Bold."""
-    for pattern in FONT_CHOICES:
-        want = pattern.split(":")[0].lower()
-        try:
-            out = subprocess.check_output(["fc-match", "-f", "%{family}|%{file}", pattern], text=True)
-            fam, path = out.split("|", 1)
-            if want in fam.lower() and os.path.exists(path):
-                return path
-        except Exception:
-            pass
-    return FALLBACK_FONT
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from effects_lib import LOOKS, EFFECTS
-
+FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+LOOKS = {
+    "cinematic": "eq=contrast=1.12:saturation=1.12:gamma=0.97,colorbalance=rs=-0.04:bs=0.06:rh=0.05:bh=-0.04,vignette=PI/5",
+    "warm": "colorbalance=rs=0.08:gs=0.02:bs=-0.08:rh=0.05:bh=-0.05,eq=saturation=1.08",
+    "cool": "colorbalance=rs=-0.06:bs=0.08:rh=-0.04:bh=0.06,eq=saturation=1.05",
+    "bw": "hue=s=0,eq=contrast=1.1",
+    "vivid": "eq=saturation=1.4:contrast=1.06",
+}
 SIZES = {"small": 26, "medium": 18, "large": 12}   # fontsize = min(width, height) / value
 COLORS = {"white": "white", "yellow": "yellow", "black": "black"}
 POS = {"bottom": "h-text_h-h/10", "center": "(h-text_h)/2", "top": "h/12"}
+BRAND_POS = {
+    "bottom_center": ("(w-text_w)/2", "h-text_h-h/18"),
+    "bottom_left": ("w/18", "h-text_h-h/18"),
+    "bottom_right": ("w-text_w-w/18", "h-text_h-h/18"),
+    "top_center": ("(w-text_w)/2", "h/18"),
+}
 
 
 def clamp(v, lo, hi, default):
@@ -56,7 +51,7 @@ def main():
     if raw:
         plan = json.loads(raw)
     else:
-        plan = {"text": {"content": os.environ.get("CAPTION", "")}}
+        plan = {"texts": [{"content": os.environ.get("CAPTION", ""), "x": 0.5, "y": 0.88, "size": "medium", "color": "white", "style": "box", "start": 0, "end": None, "fade_in": 0.5}]}
     if not isinstance(plan, dict):
         sys.exit("Plan must be a JSON object.")
 
@@ -96,80 +91,88 @@ def main():
     if look in LOOKS:
         vf.append(LOOKS[look])
 
-    # --- stackable effects (only names in EFFECTS are accepted) ---
-    effects = plan.get("effects")
-    if isinstance(effects, list):
-        for name in effects[:6]:
-            if name in EFFECTS:
-                vf.append(EFFECTS[name](w, h))
+    # --- texts list ---
+    texts = plan.get("texts") or []
+    # Backwards compatibility with legacy text single object
+    if not texts and plan.get("text"):
+        legacy = plan["text"]
+        if legacy.get("content"):
+            pos = legacy.get("position", "bottom")
+            y_val = 0.12 if pos == "top" else (0.5 if pos == "center" else 0.88)
+            texts = [{
+                "content": legacy.get("content", ""),
+                "x": 0.5,
+                "y": y_val,
+                "size": legacy.get("size", "medium"),
+                "color": legacy.get("color", "white"),
+                "style": "box",
+                "start": 0,
+                "end": None,
+                "fade_in": legacy.get("fade_in", 0.5),
+            }]
 
-    # --- text overlays (up to 6) + brand tag; each line is centered on its own ---
-    texts = plan.get("texts")
-    if not isinstance(texts, list):
-        texts = [plan["text"]] if isinstance(plan.get("text"), dict) else []
-    font = pick_font()
-    LEGACY_Y = {"top": 0.12, "center": 0.5, "bottom": 0.84}
-    file_no = 0
-
-    def add_text(content, xf, yf, size_key, color, style, t0, t1, fi):
-        nonlocal file_no
-        size = SIZES.get(size_key, 18)
-        fs = max(int(min(w, h) / size), 12)
-        per_line = max(int(0.86 * w / (0.58 * fs)), 8)
-        lines = textwrap.wrap(content, width=per_line) or [content]
-        lh = int(fs * 1.3)
-        n = len(lines)
-        if style == "box":
-            deco = f"box=1:boxcolor=black@0.5:boxborderw={max(fs // 3, 8)}"
-        elif style == "outline":
-            deco = f"borderw={max(fs // 14, 2)}:bordercolor=black@0.9"
-        else:  # clean: soft shadow, no box (TikTok / CapCut look)
-            deco = (f"borderw={max(fs // 30, 1)}:bordercolor=black@0.35:"
-                    f"shadowcolor=black@0.55:shadowx={max(fs // 24, 1)}:shadowy={max(fs // 24, 1)}")
-        enable = ""
-        if t0 > 0 or t1 is not None:
-            hi = f"{t1:.3f}" if t1 is not None else "999999"
-            enable = f":enable='between(t,{t0:.3f},{hi})'"
-        alpha = f":alpha='min((t-{t0:.3f})/{fi},1)'" if fi > 0 else ""
-        for i, line in enumerate(lines):
-            fname = f"caption_{file_no}.txt"
-            file_no += 1
-            with open(fname, "w", encoding="utf-8") as f:
-                f.write(line)
-            x = f"max(8,min(w-text_w-8,w*{xf:.4f}-text_w/2))"
-            y = f"max(4,min(h-{lh}-4,h*{yf:.4f}-{n * lh / 2:.1f}+{i * lh}))"
-            vf.append(
-                f"drawtext=fontfile={font}:textfile={fname}:expansion=none:"
-                f"fontcolor={color}:fontsize={fs}:{deco}:x='{x}':y='{y}'{enable}{alpha}")
-
-    for t in texts[:6]:
-        if not isinstance(t, dict):
-            continue
+    for idx, t in enumerate(texts[:6]):
         content = str(t.get("content", "")).strip()[:200]
         if not content:
             continue
-        if "y" in t or "x" in t:
-            xf = clamp(t.get("x", 0.5), 0.05, 0.95, 0.5)
-            yf = clamp(t.get("y", 0.84), 0.05, 0.95, 0.84)
-        else:
-            xf, yf = 0.5, LEGACY_Y.get(t.get("position", "bottom"), 0.84)
-        t0 = clamp(t.get("start", 0), 0, 3600, 0)
-        t1 = t.get("end")
-        t1 = clamp(t1, 0, 3600, None) if t1 not in (None, "") else None
-        if t1 is not None and t1 <= t0:
-            t1 = None
-        add_text(content, xf, yf, t.get("size", "medium"),
-                 COLORS.get(t.get("color", "white"), "white"),
-                 t.get("style", "clean"), t0, t1, clamp(t.get("fade_in", 0.5), 0, 3, 0.5))
+        size = SIZES.get(t.get("size", "medium"), 18)
+        fs = max(int(min(w, h) / size), 12)
+        per_line = max(int(0.88 * w / (0.62 * fs)), 8)
+        wrapped = "\n".join(textwrap.wrap(content, width=per_line)) or content
+        txt_path = f"caption_{idx}.txt"
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write(wrapped)
 
+        color = COLORS.get(t.get("color", "white"), "white")
+        style = t.get("style", "clean")
+        x_frac = clamp(t.get("x", 0.5), 0.05, 0.95, 0.5)
+        y_frac = clamp(t.get("y", 0.88), 0.05, 0.95, 0.88)
+        x_expr = f"{x_frac:.3f}*w-text_w/2"
+        y_expr = f"{y_frac:.3f}*h-text_h/2"
+
+        # Style specifics
+        style_params = []
+        if style == "box":
+            style_params.append("box=1:boxcolor=black@0.6:boxborderw=14")
+        elif style == "outline":
+            style_params.append("borderw=2:bordercolor=black")
+        else: # clean
+            style_params.append("shadowcolor=black@0.7:shadowx=2:shadowy=2")
+
+        # Time range enable & fade
+        t_start = clamp(t.get("start", 0), 0, out_dur, 0)
+        t_end = t.get("end")
+        if t_end is not None and t_end != "":
+            t_end_val = clamp(t_end, t_start, out_dur, out_dur)
+            enable_expr = f"between(t,{t_start:.2f},{t_end_val:.2f})"
+        else:
+            enable_expr = f"gte(t,{t_start:.2f})"
+
+        fi = clamp(t.get("fade_in", 0), 0, 3, 0)
+        alpha_expr = ""
+        if fi > 0:
+            alpha_expr = f":alpha='if(lt(t,{t_start:.2f}+{fi:.2f}),(t-{t_start:.2f})/{fi:.2f},1)'"
+
+        sp_str = (":" + ":".join(style_params)) if style_params else ""
+        vf.append(
+            f"drawtext=fontfile={FONT}:textfile={txt_path}:expansion=none:"
+            f"fontcolor={color}:fontsize={fs}:line_spacing=8"
+            f"{sp_str}:x={x_expr}:y={y_expr}:enable='{enable_expr}'{alpha_expr}")
+
+    # --- brand tag ---
     brand = plan.get("brand")
-    if isinstance(brand, dict):
-        name = str(brand.get("content", "")).strip()[:30]
-        if name:
-            bpos = brand.get("position", "bottom_center")
-            bx = {"bottom_left": 0.2, "bottom_right": 0.8}.get(bpos, 0.5)
-            by = 0.1 if bpos == "top_center" else 0.9
-            add_text(name, bx, by, "small", "white", "clean", 0, None, 0)
+    if brand and isinstance(brand, dict):
+        b_content = str(brand.get("content", "")).strip()[:30]
+        if b_content:
+            b_pos_key = brand.get("position", "bottom_center")
+            b_x, b_y = BRAND_POS.get(b_pos_key, BRAND_POS["bottom_center"])
+            b_size = max(int(min(w, h) / 36), 11)
+            with open("brand.txt", "w", encoding="utf-8") as f:
+                f.write(b_content)
+            vf.append(
+                f"drawtext=fontfile={FONT}:textfile=brand.txt:expansion=none:"
+                f"fontcolor=white@0.9:fontsize={b_size}:box=1:boxcolor=black@0.5:boxborderw=8:"
+                f"x={b_x}:y={b_y}")
 
     # --- fades (last, so they cover everything) ---
     fin = clamp(plan.get("fade_in", 0), 0, 3, 0)
@@ -197,7 +200,7 @@ def main():
             cmd += ["-c:a", "copy"]
     cmd += ["-movflags", "+faststart", "output.mp4"]
 
-    print("Applied:", {k: plan[k] for k in plan if k in ("texts", "text", "brand", "look", "effects", "zoom", "speed", "trim", "fade_in", "fade_out")})
+    print("Applied:", {k: plan[k] for k in plan if k in ("texts", "brand", "look", "zoom", "speed", "trim", "fade_in", "fade_out")})
     print("Filters:", ",".join(vf) or "(none)")
     subprocess.run(cmd, check=True)
 
