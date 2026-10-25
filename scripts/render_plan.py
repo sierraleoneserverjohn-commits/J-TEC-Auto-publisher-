@@ -22,17 +22,12 @@ def pick_font():
         except Exception:
             pass
     return FALLBACK_FONT
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from effects_lib import LOOKS, EFFECTS
 
-
-LOOKS = {
-    "cinematic": "eq=contrast=1.12:saturation=1.12:gamma=0.97,colorbalance=rs=-0.04:bs=0.06:rh=0.05:bh=-0.04,vignette=PI/5",
-    "warm": "colorbalance=rs=0.08:gs=0.02:bs=-0.08:rh=0.05:bh=-0.05,eq=saturation=1.08",
-    "cool": "colorbalance=rs=-0.06:bs=0.08:rh=-0.04:bh=0.06,eq=saturation=1.05",
-    "bw": "hue=s=0,eq=contrast=1.1",
-    "vivid": "eq=saturation=1.4:contrast=1.06",
-}
 SIZES = {"small": 26, "medium": 18, "large": 12}   # fontsize = min(width, height) / value
 COLORS = {"white": "white", "yellow": "yellow", "black": "black"}
+POS = {"bottom": "h-text_h-h/10", "center": "(h-text_h)/2", "top": "h/12"}
 
 
 def clamp(v, lo, hi, default):
@@ -101,41 +96,80 @@ def main():
     if look in LOOKS:
         vf.append(LOOKS[look])
 
-    # --- text (each line is centered on its own; works on every FFmpeg version) ---
-    text = plan.get("text") or {}
-    content = str(text.get("content", "")).strip()[:200]
-    if content:
-        font = pick_font()
-        size = SIZES.get(text.get("size", "medium"), 18)
+    # --- stackable effects (only names in EFFECTS are accepted) ---
+    effects = plan.get("effects")
+    if isinstance(effects, list):
+        for name in effects[:6]:
+            if name in EFFECTS:
+                vf.append(EFFECTS[name](w, h))
+
+    # --- text overlays (up to 6) + brand tag; each line is centered on its own ---
+    texts = plan.get("texts")
+    if not isinstance(texts, list):
+        texts = [plan["text"]] if isinstance(plan.get("text"), dict) else []
+    font = pick_font()
+    LEGACY_Y = {"top": 0.12, "center": 0.5, "bottom": 0.84}
+    file_no = 0
+
+    def add_text(content, xf, yf, size_key, color, style, t0, t1, fi):
+        nonlocal file_no
+        size = SIZES.get(size_key, 18)
         fs = max(int(min(w, h) / size), 12)
         per_line = max(int(0.86 * w / (0.58 * fs)), 8)
         lines = textwrap.wrap(content, width=per_line) or [content]
         lh = int(fs * 1.3)
         n = len(lines)
-        color = COLORS.get(text.get("color", "white"), "white")
-        pos = text.get("position", "bottom")
-        style = text.get("style", "clean")
-        fi = clamp(text.get("fade_in", 0.5), 0, 3, 0.5)
-        alpha = f":alpha='min(t/{fi},1)'" if fi > 0 else ""
         if style == "box":
             deco = f"box=1:boxcolor=black@0.5:boxborderw={max(fs // 3, 8)}"
         elif style == "outline":
             deco = f"borderw={max(fs // 14, 2)}:bordercolor=black@0.9"
         else:  # clean: soft shadow, no box (TikTok / CapCut look)
-            deco = f"borderw={max(fs // 30, 1)}:bordercolor=black@0.35:shadowcolor=black@0.55:shadowx={max(fs // 24, 1)}:shadowy={max(fs // 24, 1)}"
+            deco = (f"borderw={max(fs // 30, 1)}:bordercolor=black@0.35:"
+                    f"shadowcolor=black@0.55:shadowx={max(fs // 24, 1)}:shadowy={max(fs // 24, 1)}")
+        enable = ""
+        if t0 > 0 or t1 is not None:
+            hi = f"{t1:.3f}" if t1 is not None else "999999"
+            enable = f":enable='between(t,{t0:.3f},{hi})'"
+        alpha = f":alpha='min((t-{t0:.3f})/{fi},1)'" if fi > 0 else ""
         for i, line in enumerate(lines):
-            fname = f"caption_{i}.txt"
+            fname = f"caption_{file_no}.txt"
+            file_no += 1
             with open(fname, "w", encoding="utf-8") as f:
                 f.write(line)
-            if pos == "top":
-                y = f"h/12+{i * lh}"
-            elif pos == "center":
-                y = f"(h-{n * lh})/2+{i * lh}"
-            else:
-                y = f"h-h/9-{(n - i) * lh}"
+            x = f"max(8,min(w-text_w-8,w*{xf:.4f}-text_w/2))"
+            y = f"max(4,min(h-{lh}-4,h*{yf:.4f}-{n * lh / 2:.1f}+{i * lh}))"
             vf.append(
                 f"drawtext=fontfile={font}:textfile={fname}:expansion=none:"
-                f"fontcolor={color}:fontsize={fs}:{deco}:x=(w-text_w)/2:y={y}{alpha}")
+                f"fontcolor={color}:fontsize={fs}:{deco}:x='{x}':y='{y}'{enable}{alpha}")
+
+    for t in texts[:6]:
+        if not isinstance(t, dict):
+            continue
+        content = str(t.get("content", "")).strip()[:200]
+        if not content:
+            continue
+        if "y" in t or "x" in t:
+            xf = clamp(t.get("x", 0.5), 0.05, 0.95, 0.5)
+            yf = clamp(t.get("y", 0.84), 0.05, 0.95, 0.84)
+        else:
+            xf, yf = 0.5, LEGACY_Y.get(t.get("position", "bottom"), 0.84)
+        t0 = clamp(t.get("start", 0), 0, 3600, 0)
+        t1 = t.get("end")
+        t1 = clamp(t1, 0, 3600, None) if t1 not in (None, "") else None
+        if t1 is not None and t1 <= t0:
+            t1 = None
+        add_text(content, xf, yf, t.get("size", "medium"),
+                 COLORS.get(t.get("color", "white"), "white"),
+                 t.get("style", "clean"), t0, t1, clamp(t.get("fade_in", 0.5), 0, 3, 0.5))
+
+    brand = plan.get("brand")
+    if isinstance(brand, dict):
+        name = str(brand.get("content", "")).strip()[:30]
+        if name:
+            bpos = brand.get("position", "bottom_center")
+            bx = {"bottom_left": 0.2, "bottom_right": 0.8}.get(bpos, 0.5)
+            by = 0.1 if bpos == "top_center" else 0.9
+            add_text(name, bx, by, "small", "white", "clean", 0, None, 0)
 
     # --- fades (last, so they cover everything) ---
     fin = clamp(plan.get("fade_in", 0), 0, 3, 0)
@@ -163,7 +197,7 @@ def main():
             cmd += ["-c:a", "copy"]
     cmd += ["-movflags", "+faststart", "output.mp4"]
 
-    print("Applied:", {k: plan[k] for k in plan if k in ("text", "look", "zoom", "speed", "trim", "fade_in", "fade_out")})
+    print("Applied:", {k: plan[k] for k in plan if k in ("texts", "text", "brand", "look", "effects", "zoom", "speed", "trim", "fade_in", "fade_out")})
     print("Filters:", ",".join(vf) or "(none)")
     subprocess.run(cmd, check=True)
 
